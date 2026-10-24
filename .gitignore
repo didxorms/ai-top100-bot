@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.venv/
+.local/
+.vscode/
+__pycache__/
+*.pyc
+*.exe
+*.pem
+*.key
+*.log

@@ -1,0 +1,12 @@
+.env
+.env.*
+.venv/
+.local/
+.git/
+.vscode/
+__pycache__/
+*.pyc
+*.exe
+*.pem
+*.key
+test_*.py
