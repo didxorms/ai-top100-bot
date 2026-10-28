@@ -10,10 +10,12 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI
 from fastapi.responses import JSONResponse
 
-from conversation_state import ConversationStore, session_key_from_event
-from openai_payload import make_request_body, make_skill_response, read_answer
+from .conversation_state import ConversationStore, session_key_from_event
+from .openai_payload import make_request_body, make_skill_response, read_answer
+from .action_tools import PracticeActions, actor_key_from_event
+from .tool_agent import run_tool_agent
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BASE_DIR / ".env")
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
@@ -29,6 +31,10 @@ STATE_STORE = ConversationStore(DATA_DIR / "conversation-state.sqlite3")
 # 사용 중인 대화의 잠금만 유지합니다. 단일 Uvicorn 프로세스를 기준으로 합니다.
 SESSION_LOCKS = WeakValueDictionary()
 RESET_COMMANDS = {"/새대화", "/초기화", "/new"}
+ACTION_MODE = os.getenv("ACTION_MODE", "off").strip().lower()
+if ACTION_MODE not in {"off", "mock"}:
+    raise ValueError("ACTION_MODE는 off 또는 mock이어야 합니다.")
+PRACTICE_ACTIONS = PracticeActions(STATE_STORE.path) if ACTION_MODE == "mock" else None
 
 app = FastAPI()
 
@@ -67,23 +73,26 @@ def extract_user_text(event: dict, path: str):
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-async def generate_answer(user_text: str, session_key: str | None = None):
+async def generate_answer(user_text: str, session_key: str | None = None, actor_key: str | None = None):
     previous_id = STATE_STORE.get(session_key) if session_key else None
-    # 사용자 허용 범위: 질문 내용만 전송합니다. 카카오 이벤트와 토큰은 전달하지 않습니다.
+    # 질문과 연습용 도구 결과만 전달하며 카카오 이벤트, 식별자, 토큰은 제외합니다.
     async with httpx.AsyncClient(timeout=90) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/responses",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json=make_request_body(
-                user_text,
-                model=OPENAI_MODEL,
-                remember=session_key is not None,
-                previous_response_id=previous_id,
-            ),
+        body = make_request_body(
+            user_text,
+            model=OPENAI_MODEL,
+            remember=session_key is not None,
+            previous_response_id=previous_id,
         )
-    response.raise_for_status()
-    result = response.json()
-    answer = read_answer(result)
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+        if PRACTICE_ACTIONS:
+            result, answer = await run_tool_agent(client, body, headers, PRACTICE_ACTIONS, actor_key)
+        else:
+            response = await client.post(
+                "https://api.openai.com/v1/responses", headers=headers, json=body,
+            )
+            response.raise_for_status()
+            result = response.json()
+            answer = read_answer(result)
     if session_key:
         response_id = result.get("id")
         if not isinstance(response_id, str) or not response_id:
@@ -117,13 +126,21 @@ async def send_reply(callback_token: str, answer: str):
 
 async def process_event(event: dict, callback_token: str, session_key: str | None):
     user_text = extract_user_text(event, KAKAO_TEXT_PATH)
+    actor_key = actor_key_from_event(event) if PRACTICE_ACTIONS else None
+    command_answer = None
+    if user_text and PRACTICE_ACTIONS:
+        command_answer = await PRACTICE_ACTIONS.handle_command(user_text, actor_key)
     if user_text is None:
         record_event_shape(event)
         print("KAKAO_TEXT_PATH 설정에 필요한 필드 구조를 저장했습니다.", flush=True)
         answer = "메시지를 받았습니다. 메시지 연결 설정을 확인 중입니다."
+    elif command_answer is not None:
+        answer = command_answer
     elif user_text in RESET_COMMANDS:
         if session_key:
             STATE_STORE.reset(session_key)
+            if PRACTICE_ACTIONS and actor_key:
+                await asyncio.to_thread(PRACTICE_ACTIONS.store.cancel, actor_key)
             answer = "새 대화를 시작했습니다. 다음 질문부터 이전 대화를 참고하지 않습니다."
         else:
             answer = "채팅방 정보를 확인하지 못해 새 대화를 시작할 수 없습니다."
@@ -139,7 +156,11 @@ async def process_event(event: dict, callback_token: str, session_key: str | Non
     else:
         try:
             # 콜백 토큰의 유효 시간(5분)보다 짧게 전체 대기 시간을 제한합니다.
-            answer = await asyncio.wait_for(generate_answer(user_text, session_key), timeout=100)
+            if PRACTICE_ACTIONS:
+                generation = generate_answer(user_text, session_key, actor_key)
+            else:
+                generation = generate_answer(user_text, session_key)
+            answer = await asyncio.wait_for(generation, timeout=100)
             print("OpenAI 답변 생성 성공", flush=True)
         except httpx.HTTPStatusError as exc:
             print("OpenAI HTTP 오류:", exc.response.status_code, flush=True)

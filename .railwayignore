@@ -5,8 +5,12 @@
 .git/
 .vscode/
 __pycache__/
+**/__pycache__/
 *.pyc
 *.exe
 *.pem
 *.key
-test_*.py
+tests/
+docs/
+scripts/
+tools/

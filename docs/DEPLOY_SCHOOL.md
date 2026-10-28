@@ -3,7 +3,8 @@
 제공된 신청 화면은 Docker 이미지 실행과 Git 저장소 기반 실행, 포트 매핑, 환경변수, 접근 범위, CPU·메모리 설정을 지원합니다.
 추가 화면에서 Git 저장소 URL, 브랜치, 런타임, 실행 명령을 직접 지정하는 것을 확인했습니다.
 패키지 자동 설치 여부와 영구 저장 공간 연결 방식은 아직 확인되지 않았습니다.
-실제 신청이나 외부 배포는 진행하지 않았습니다.
+학교 화면에서 Python 3.11, Public, 포트 매핑 `9001:8000`과 배포 완료 표시를 확인했습니다.
+공개 서버 주소는 관리자가 설정 중이며, 실제 외부 접속과 봇 응답은 별도 검증이 필요합니다.
 
 ## 신청 화면의 기본값
 
@@ -12,7 +13,7 @@
 | Project name | `ai-top100-bot` |
 | Description | `AI_TOP_100 대회용 카카오톡 AI 봇 서버. Python 웹훅과 OpenAI API 사용.` |
 | Container port | `8000` |
-| Host port | 학교에서 배정하거나 사용 가능하다고 확인한 포트. 화면 예시 값은 `9000`. |
+| Host port | 현재 신청값 `9001`. 다른 프로젝트와 겹치지 않는 포트를 사용. |
 | Access scope | 외부 카카오 서버가 접속할 수 있도록 `PUBLIC` |
 | CPU | 시작값 1코어 |
 | Memory | 시작값 512MB, 선택 가능하면 여유를 위해 1GB 고려 |
@@ -27,7 +28,7 @@ LLM 계산은 OpenAI에서 수행하므로 이 서버에 모델이나 GPU를 설
 
 | 항목 | 설정 |
 |---|---|
-| Git repository URL | 실제 업로드를 마친 GitHub 저장소의 HTTPS URL |
+| Git repository URL | `https://github.com/didxorms/ai-top100-bot` |
 | Branch | `main` |
 | Runtime | Python 3.11 이상. 목록에 3.11이 있으면 선택 |
 | Run command | `python -m pip install --disable-pip-version-check -r requirements.txt && exec python serve.py` |
@@ -80,7 +81,7 @@ API 키는 환경변수로만 전달하고, `.env`, `.venv`, `.local`, Cloudflar
 1. 학교의 빌드·실행 방식과 영구 저장 공간을 확인합니다.
 2. 봇 코드를 배포하고 필요한 관리자 승인을 받습니다.
 3. 공개 주소의 `/healthz`에서 `{"status":"ok"}`를 확인합니다.
-4. 기존 대화 기억을 유지하려면 `backup_state.py`로 백업한 DB를 새 서버의 저장 공간으로 이전합니다.
+4. 기존 대화 기억을 유지하려면 프로젝트 루트에서 `python -m scripts.backup_state`로 백업한 DB를 새 서버의 저장 공간으로 이전합니다.
 5. 카카오 웹훅 주소를 학교 서버의 `/kakao`로 변경합니다.
 6. `echo` 응답, 실제 OpenAI 응답, 서버 재시작 후 기억 유지 순으로 확인합니다.
 7. 노트북의 Python 서버와 Cloudflare 터널을 끈 뒤에도 카카오톡 답장이 오는지 확인합니다.

@@ -5,6 +5,16 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
+    "startCommand": "python serve.py",
+    "numReplicas": 1,
+    "sleepApplication": false,
+    "requiredMountPath": "/data",
+    "limitOverride": {
+      "containers": {
+        "cpu": 1,
+        "memoryBytes": 536870912
+      }
+    },
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 120,
     "restartPolicyType": "ALWAYS",

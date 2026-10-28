@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backup_state import backup_database
-from conversation_state import ConversationStore
+from scripts.backup_state import backup_database
+from bot.conversation_state import ConversationStore
 
 
 class BackupTests(unittest.TestCase):

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from conversation_state import ConversationStore, session_key_from_event
+from bot.conversation_state import ConversationStore, session_key_from_event
 
 
 class ConversationStateTests(unittest.TestCase):

@@ -29,7 +29,7 @@ def backup_database(source: Path, destination: Path):
 
 
 if __name__ == "__main__":
-    base_dir = Path(__file__).resolve().parent
+    base_dir = Path(__file__).resolve().parents[1]
     load_dotenv(base_dir / ".env")
     data_dir = Path(os.getenv("DATA_DIR", "").strip() or base_dir / ".local")
     if not data_dir.is_absolute():

@@ -1,6 +1,6 @@
 import unittest
 
-from openai_payload import make_request_body, make_skill_response, read_answer
+from bot.openai_payload import make_request_body, make_skill_response, read_answer
 
 
 class PayloadTests(unittest.TestCase):

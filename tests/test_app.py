@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import BackgroundTasks
-from conversation_state import ConversationStore, session_key_from_event
+from bot.conversation_state import ConversationStore, session_key_from_event
+from bot.action_tools import PracticeActions, actor_key_from_event
 
 # 실제 .env의 인증 정보는 테스트에 사용하지 않습니다.
 with patch.dict(os.environ, {
@@ -17,8 +18,9 @@ with patch.dict(os.environ, {
     "OPENAI_MODEL": "test-model",
     "LLM_MODE": "openai",
     "KAKAO_TEXT_PATH": "d.content",
+    "ACTION_MODE": "off",
 }):
-    import app as bot
+    from bot import app as bot
 
 REAL_ASYNC_CLIENT = httpx.AsyncClient
 
@@ -28,7 +30,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         self.state_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.state_directory.cleanup)
         self.store = ConversationStore(Path(self.state_directory.name) / "state.sqlite3")
-        store_patch = patch("app.STATE_STORE", self.store)
+        store_patch = patch("bot.app.STATE_STORE", self.store)
         store_patch.start()
         self.addCleanup(store_patch.stop)
 
@@ -52,7 +54,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             return REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handler), **kwargs)
 
         event = {"d": {"callbackToken": "fake-callback-secret", "content": "테스트 질문"}}
-        with patch("app.httpx.AsyncClient", side_effect=client_factory):
+        with patch("bot.app.httpx.AsyncClient", side_effect=client_factory):
             await bot.handle_event(event, "fake-callback-secret")
 
         self.assertEqual(len(requests), 2)
@@ -73,16 +75,16 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_receipt_returns_before_llm_work(self):
         tasks = BackgroundTasks()
-        with patch("app.handle_event", new_callable=AsyncMock) as handler:
+        with patch("bot.app.handle_event", new_callable=AsyncMock) as handler:
             response = await bot.receive_event({"d": {"callbackToken": "fake-token"}}, tasks)
             self.assertEqual(response, {"ok": True})
             self.assertEqual(len(tasks.tasks), 1)
             handler.assert_not_awaited()
 
     async def test_unknown_question_path_does_not_send_event_to_openai(self):
-        with patch("app.generate_answer", new_callable=AsyncMock) as generate, \
-             patch("app.send_reply", new_callable=AsyncMock), \
-             patch("app.record_event_shape") as record:
+        with patch("bot.app.generate_answer", new_callable=AsyncMock) as generate, \
+             patch("bot.app.send_reply", new_callable=AsyncMock), \
+             patch("bot.app.record_event_shape") as record:
             await bot.handle_event({"d": {"callbackToken": "fake-token"}}, "fake-token")
             generate.assert_not_awaited()
             record.assert_called_once()
@@ -92,21 +94,21 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             "private error details", request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
             response=httpx.Response(401),
         )
-        with patch("app.generate_answer", new_callable=AsyncMock, side_effect=error), \
-             patch("app.send_reply", new_callable=AsyncMock) as reply:
+        with patch("bot.app.generate_answer", new_callable=AsyncMock, side_effect=error), \
+             patch("bot.app.send_reply", new_callable=AsyncMock) as reply:
             await bot.handle_event({"d": {"content": "테스트 질문"}}, "fake-token")
             reply.assert_awaited_once()
             self.assertNotIn("private error details", reply.await_args.args[1])
 
     async def test_missing_key_does_not_attempt_openai(self):
-        with patch("app.OPENAI_API_KEY", ""), \
-             patch("app.generate_answer", new_callable=AsyncMock) as generate, \
-             patch("app.send_reply", new_callable=AsyncMock):
+        with patch("bot.app.OPENAI_API_KEY", ""), \
+             patch("bot.app.generate_answer", new_callable=AsyncMock) as generate, \
+             patch("bot.app.send_reply", new_callable=AsyncMock):
             await bot.handle_event({"d": {"content": "테스트 질문"}}, "fake-token")
             generate.assert_not_awaited()
 
     async def test_shape_file_excludes_message_and_tokens(self):
-        with tempfile.TemporaryDirectory() as directory, patch("app.DATA_DIR", Path(directory)):
+        with tempfile.TemporaryDirectory() as directory, patch("bot.app.DATA_DIR", Path(directory)):
             bot.record_event_shape({"d": {
                 "callbackToken": "sensitive-token-value",
                 "testQuestion": "private-message-value",
@@ -118,17 +120,17 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(json.loads(saved)["d"]["testQuestion"], "str")
 
     async def test_echo_mode_returns_actual_content_without_openai(self):
-        with patch("app.LLM_MODE", "echo"), \
-             patch("app.generate_answer", new_callable=AsyncMock) as generate, \
-             patch("app.send_reply", new_callable=AsyncMock) as reply:
+        with patch("bot.app.LLM_MODE", "echo"), \
+             patch("bot.app.generate_answer", new_callable=AsyncMock) as generate, \
+             patch("bot.app.send_reply", new_callable=AsyncMock) as reply:
             await bot.handle_event({"d": {"content": "안녕"}}, "fake-token")
             generate.assert_not_awaited()
             reply.assert_awaited_once_with("fake-token", "[연동 테스트] 안녕")
 
     async def test_invalid_mode_does_not_accidentally_call_openai(self):
-        with patch("app.LLM_MODE", "typo"), \
-             patch("app.generate_answer", new_callable=AsyncMock) as generate, \
-             patch("app.send_reply", new_callable=AsyncMock):
+        with patch("bot.app.LLM_MODE", "typo"), \
+             patch("bot.app.generate_answer", new_callable=AsyncMock) as generate, \
+             patch("bot.app.send_reply", new_callable=AsyncMock):
             await bot.handle_event({"d": {"content": "안녕"}}, "fake-token")
             generate.assert_not_awaited()
 
@@ -164,11 +166,11 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         event = {"d": {
             "isChannelChatroom": True, "botUserKey": "test-user", "content": "예산은 10만 원이야",
         }}
-        with patch("app.httpx.AsyncClient", side_effect=client_factory):
+        with patch("bot.app.httpx.AsyncClient", side_effect=client_factory):
             await bot.handle_event(event, "fake-callback-first")
             # 프로세스 재시작 시처럼 저장소 객체를 새로 만들어도 같은 응답 ID를 사용합니다.
             reopened = ConversationStore(self.store.path)
-            with patch("app.STATE_STORE", reopened):
+            with patch("bot.app.STATE_STORE", reopened):
                 await bot.handle_event({"d": {**event["d"], "content": "예산이 얼마였지?"}}, "fake-callback-second")
 
         self.assertEqual(len(requests), 2)
@@ -184,8 +186,8 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         session_key = session_key_from_event(event)
         self.store.set(session_key, "resp_old")
         self.store.set("another-session", "resp_keep")
-        with patch("app.generate_answer", new_callable=AsyncMock) as generate, \
-             patch("app.send_reply", new_callable=AsyncMock) as reply:
+        with patch("bot.app.generate_answer", new_callable=AsyncMock) as generate, \
+             patch("bot.app.send_reply", new_callable=AsyncMock) as reply:
             await bot.handle_event(event, "fake-token")
         generate.assert_not_awaited()
         self.assertIsNone(self.store.get(session_key))
@@ -203,8 +205,8 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
 
         first = {"d": {"botGroupKey": "shared-room", "botUserKey": "user-a", "content": "first"}}
         second = {"d": {"botGroupKey": "shared-room", "botUserKey": "user-b", "content": "second"}}
-        with patch("app.generate_answer", side_effect=generate), \
-             patch("app.send_reply", new_callable=AsyncMock):
+        with patch("bot.app.generate_answer", side_effect=generate), \
+             patch("bot.app.send_reply", new_callable=AsyncMock):
             await asyncio.gather(bot.handle_event(first, "fake-one"), bot.handle_event(second, "fake-two"))
         self.assertEqual(order, ["first:start", "first:end", "second:start", "second:end"])
 
@@ -217,14 +219,14 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
         def client_factory(**kwargs):
             return REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handler), **kwargs)
 
-        with patch("app.httpx.AsyncClient", side_effect=client_factory):
+        with patch("bot.app.httpx.AsyncClient", side_effect=client_factory):
             with self.assertRaises(httpx.HTTPStatusError):
                 await bot.generate_answer("질문", "session")
         self.assertEqual(self.store.get("session"), "resp_keep")
 
     async def test_readiness_checks_storage_without_calling_external_apis(self):
         self.store.set("session", "resp_keep")
-        with patch("app.generate_answer", new_callable=AsyncMock) as generate:
+        with patch("bot.app.generate_answer", new_callable=AsyncMock) as generate:
             self.assertEqual(await bot.readiness(), {"status": "ok"})
             generate.assert_not_awaited()
         self.assertEqual(self.store.get("session"), "resp_keep")
@@ -235,6 +237,58 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             response = await bot.readiness()
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("private filesystem details", response.body.decode())
+
+    async def test_mock_actions_full_question_prepare_and_direct_confirmation_flow(self):
+        actions = PracticeActions(self.store.path)
+        openai_requests = []
+        replies = []
+
+        def handler(request):
+            if request.url.host == "api.openai.com":
+                openai_requests.append(json.loads(request.content))
+                if len(openai_requests) == 1:
+                    return httpx.Response(200, json={"id": "resp_prepare", "output": [{
+                        "type": "function_call", "name": "prepare_registration", "call_id": "call_prepare",
+                        "arguments": '{"event_id":"EVT001","quantity":2}',
+                    }]})
+                return httpx.Response(200, json={"id": "resp_done", "output": [{
+                    "type": "message", "content": [{"type": "output_text", "text": "신청 내용을 준비했어요."}],
+                }]})
+            if request.url.host == "kapi.kakao.com":
+                replies.append(json.loads(request.content))
+                return httpx.Response(200, json={"sendCount": 1, "errorCount": 0})
+            raise AssertionError("예상하지 않은 외부 주소")
+
+        def client_factory(**kwargs):
+            if "transport" not in kwargs:
+                kwargs["transport"] = httpx.MockTransport(handler)
+            return REAL_ASYNC_CLIENT(**kwargs)
+
+        event = {"d": {"isChannelChatroom": True, "botUserKey": "fake-private-user",
+                       "content": "EVT001에 2명 신청해줘"}}
+        actor = actor_key_from_event(event)
+        with patch("bot.app.PRACTICE_ACTIONS", actions), \
+             patch("bot.app.httpx.AsyncClient", side_effect=client_factory):
+            await bot.handle_event(event, "fake-callback")
+            self.assertEqual(actions.store.registrations(actor), [])
+            pending = actions.store.pending(actor)
+            self.assertIn(pending["code"], json.dumps(replies, ensure_ascii=False))
+            await bot.handle_event({"d": {**event["d"], "content": "/신청확정 " + pending["code"]}}, "fake-callback")
+            self.assertEqual(len(actions.store.registrations(actor)), 1)
+            self.assertEqual(len(openai_requests), 2)  # 확정은 LLM 호출 없이 서버가 처리합니다.
+            self.assertEqual(self.store.get(session_key_from_event(event)), "resp_done")
+        outgoing = json.dumps(openai_requests)
+        for secret in ("fake-private-user", "fake-callback", "fake-bot-secret", actor):
+            self.assertNotIn(secret, outgoing)
+
+    async def test_practice_help_does_not_call_openai(self):
+        actions = PracticeActions(self.store.path)
+        with patch("bot.app.PRACTICE_ACTIONS", actions), \
+             patch("bot.app.generate_answer", new_callable=AsyncMock) as generate, \
+             patch("bot.app.send_reply", new_callable=AsyncMock) as reply:
+            await bot.handle_event({"d": {"content": "/실습"}}, "fake-token")
+        generate.assert_not_awaited()
+        self.assertIn("실습", reply.await_args.args[1])
 
 
 if __name__ == "__main__":

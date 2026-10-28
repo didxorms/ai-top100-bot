@@ -19,4 +19,4 @@ def server_options():
 
 if __name__ == "__main__":
     load_dotenv(Path(__file__).resolve().parent / ".env")
-    uvicorn.run("app:app", **server_options())
+    uvicorn.run("bot.app:app", **server_options())

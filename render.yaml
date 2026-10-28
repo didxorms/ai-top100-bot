@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+services:
+  - type: web
+    name: ai-top100-bot
+    runtime: docker
+    repo: https://github.com/didxorms/ai-top100-bot
+    branch: main
+    plan: 0.5c-512mb
+    region: singapore
+    numInstances: 1
+    autoDeployTrigger: off
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 300
+    disk:
+      name: bot-state
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4.1-mini
+      - key: LLM_MODE
+        value: echo
+      - key: ACTION_MODE
+        value: off
+      - key: KAKAO_TEXT_PATH
+        value: d.content
+      - key: DATA_DIR
+        value: /data
+      - key: PORT
+        value: "10000"
