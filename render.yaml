@@ -12,7 +12,6 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /healthz
-    maxShutdownDelaySeconds: 300
     disk:
       name: bot-state
       mountPath: /data
