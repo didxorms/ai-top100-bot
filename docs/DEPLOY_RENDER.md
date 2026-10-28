@@ -4,6 +4,18 @@
 구조는 카카오톡 → Render의 HTTPS 주소 → Python 봇 → OpenAI → 카카오톡입니다.
 노트북이나 학교 서버의 가동 상태에 의존하지 않도록 Render에서 봇과 SQLite DB를 함께 운영합니다.
 
+## 생성된 서버
+
+- 공개 주소: https://ai-top100-bot.onrender.com
+- 상태 점검: https://ai-top100-bot.onrender.com/healthz
+- 카카오 웹훅: https://ai-top100-bot.onrender.com/kakao
+- 관리 화면: https://dashboard.render.com/web/srv-dbgk7um7bikc73ae2e80
+- 서비스 ID: `srv-dbgk7um7bikc73ae2e80`
+- 영구 디스크: `bot-state`, `/data`, 1GB
+- 최초 배포 코드: `6af3f96813aad1341a060c7295a991f7ed7c0ea2`
+
+최초 생성 모드는 `echo`입니다. 아래 카카오 연결 검증 후 `openai`로 전환합니다.
+
 ## 준비된 설정
 
 `render.yaml`에 다음 구성을 준비했습니다. 파일을 준비한 것만으로 유료 서버가 생성되지는 않습니다.
