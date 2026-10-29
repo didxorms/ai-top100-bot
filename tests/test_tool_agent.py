@@ -112,6 +112,41 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(httpx.HTTPStatusError):
             await self.run_agent(lambda request: httpx.Response(503))
 
+    async def test_web_search_is_preserved_with_actions_and_budget_spans_rounds(self):
+        requests = []
+
+        def handler(request):
+            requests.append(json.loads(request.content))
+            if len(requests) < 3:
+                return response(f"resp_{len(requests)}", [
+                    {"type": "web_search_call", "status": "completed"},
+                    function_call(call_id=f"call_{len(requests)}"),
+                ])
+            return response("resp_final", text_output())
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await run_tool_agent(client, make_request_body("행사와 뉴스", web_search=True),
+                                 {"Authorization": "Bearer fake"}, self.actions, "actor")
+        self.assertEqual([r["max_tool_calls"] for r in requests], [3, 2, 1])
+        self.assertTrue(all(any(tool["type"] == "web_search" for tool in r["tools"]) for r in requests))
+        self.assertTrue(all(any(tool.get("name") == "list_events" for tool in r["tools"]) for r in requests))
+
+    async def test_search_budget_exhaustion_disables_only_search(self):
+        requests = []
+
+        def handler(request):
+            requests.append(json.loads(request.content))
+            if len(requests) == 1:
+                return response("resp_first", [{"type": "web_search_call", "status": "completed"}] * 3
+                                + [function_call()])
+            return response("resp_final", text_output())
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await run_tool_agent(client, make_request_body("행사", web_search=True),
+                                 {"Authorization": "Bearer fake"}, self.actions, "actor")
+        self.assertNotIn("max_tool_calls", requests[1])
+        self.assertTrue(all(tool["type"] == "function" for tool in requests[1]["tools"]))
+
 
 if __name__ == "__main__":
     unittest.main()

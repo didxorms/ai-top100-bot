@@ -1,5 +1,7 @@
 """OpenAI 연동용 요청과 응답 형식만 준비합니다. 외부 API는 호출하지 않습니다."""
 
+from .web_search import MAX_SEARCH_CALLS, WEB_SEARCH_TOOL, render_citations, search_instructions, split_kakao_text
+
 
 def make_request_body(
     user_text: str,
@@ -7,6 +9,7 @@ def make_request_body(
     *,
     remember: bool = False,
     previous_response_id: str | None = None,
+    web_search: bool = False,
 ):
     if previous_response_id and not remember:
         raise ValueError("이전 응답을 이어가려면 remember=True가 필요합니다.")
@@ -29,6 +32,14 @@ def make_request_body(
     }
     if previous_response_id:
         body["previous_response_id"] = previous_response_id
+    if web_search:
+        body["instructions"] += search_instructions(True)
+        body["tools"] = [dict(WEB_SEARCH_TOOL)]
+        body["tool_choice"] = "auto"
+        body["max_tool_calls"] = MAX_SEARCH_CALLS
+        body["max_output_tokens"] = 1400
+    else:
+        body["instructions"] += search_instructions(False)
     return body
 
 
@@ -58,6 +69,8 @@ def read_answer(response: dict):
                 continue
             if not isinstance(text, str):
                 raise ValueError("OpenAI 답변이 문자열이 아닙니다.")
+            if part.get("type") == "output_text":
+                text = render_citations(text, part.get("annotations", []))
             texts.append(text)
     answer = "\n".join(texts).strip()
     if not answer:
@@ -68,14 +81,12 @@ def read_answer(response: dict):
 def make_skill_response(answer: str):
     # 카카오 제한: 말풍선당 1,000자, 최대 3개 말풍선.
     answer = answer.strip() or "답변을 생성하지 못했습니다. 다시 질문해 주세요."
-    if len(answer) > 3000:
-        answer = answer[:2999] + "…"
     return {
         "version": "2.0",
         "template": {
             "outputs": [
-                {"simpleText": {"text": answer[start:start + 1000]}}
-                for start in range(0, len(answer), 1000)
+                {"simpleText": {"text": chunk}}
+                for chunk in split_kakao_text(answer)
             ]
         },
     }

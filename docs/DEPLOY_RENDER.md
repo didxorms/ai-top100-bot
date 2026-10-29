@@ -16,6 +16,7 @@
 - OpenAI 모드 배포 코드: `7898d067793e7fd9927871c6e5cc5e34c6be766c`
 - 현재 모드: `LLM_MODE=openai`, `ACTION_MODE=off`
 - 현재 모델: `OPENAI_MODEL=gpt-6-luna` (2026-10-29 기존 유효 키로 응답 확인 후 반영)
+- 웹 검색: `WEB_SEARCH_MODE=auto` (2026-10-29 추가, 최신 공개 정보는 OpenAI 공식 검색 도구 사용)
 
 카카오 에코 답장 검증 후 `openai`로 전환했고, 공개 `/healthz` 응답을 확인했습니다.
 서버 로그에서도 실제 OpenAI 답변 생성 성공과 카카오 콜백 HTTP 200·전송 성공을 확인했습니다.

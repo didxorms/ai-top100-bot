@@ -1,4 +1,6 @@
 import unittest
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 from bot.openai_payload import make_request_body, make_skill_response, read_answer
 
@@ -58,8 +60,10 @@ class PayloadTests(unittest.TestCase):
         self.assertNotIn("BOT_TOKEN", request)
 
     def test_memory_request_stores_response_and_resends_instructions(self):
-        first = make_request_body("첫 질문", remember=True)
-        second = make_request_body("다음 질문", remember=True, previous_response_id="resp_first")
+        with patch("bot.web_search.datetime") as clock:
+            clock.now.return_value = datetime(2026, 10, 29, 9, tzinfo=timezone.utc)
+            first = make_request_body("첫 질문", remember=True)
+            second = make_request_body("다음 질문", remember=True, previous_response_id="resp_first")
         self.assertTrue(first["store"])
         self.assertNotIn("previous_response_id", first)
         self.assertEqual(second["previous_response_id"], "resp_first")

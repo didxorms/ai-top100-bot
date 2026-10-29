@@ -22,6 +22,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini"
 # echo는 결제 없이 사용자 메시지 수신과 카카오 답장을 확인하는 모드입니다.
 LLM_MODE = os.getenv("LLM_MODE", "openai").strip().lower()
+WEB_SEARCH_MODE = os.getenv("WEB_SEARCH_MODE", "auto").strip().lower()
+if WEB_SEARCH_MODE not in {"auto", "off"}:
+    raise ValueError("WEB_SEARCH_MODE는 auto 또는 off여야 합니다.")
 # 실제 수신 이벤트에서 질문이 d.content에 들어오는 것을 확인했습니다.
 KAKAO_TEXT_PATH = os.getenv("KAKAO_TEXT_PATH", "").strip()
 DATA_DIR = Path(os.getenv("DATA_DIR", "").strip() or BASE_DIR / ".local")
@@ -82,6 +85,7 @@ async def generate_answer(user_text: str, session_key: str | None = None, actor_
             model=OPENAI_MODEL,
             remember=session_key is not None,
             previous_response_id=previous_id,
+            web_search=WEB_SEARCH_MODE == "auto",
         )
         headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
         if PRACTICE_ACTIONS:
@@ -93,6 +97,9 @@ async def generate_answer(user_text: str, session_key: str | None = None, actor_
             response.raise_for_status()
             result = response.json()
             answer = read_answer(result)
+            search_calls = sum(item.get("type") == "web_search_call" for item in result["output"])
+            if search_calls:
+                print("웹 검색 도구 사용:", search_calls, flush=True)
     if session_key:
         response_id = result.get("id")
         if not isinstance(response_id, str) or not response_id:

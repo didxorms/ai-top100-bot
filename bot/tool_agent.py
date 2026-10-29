@@ -8,9 +8,10 @@ from .openai_payload import read_answer
 
 async def run_tool_agent(client, body, headers, actions, actor):
     body = {**body, "instructions": body["instructions"] + ACTION_INSTRUCTIONS,
-            "tools": TOOLS, "parallel_tool_calls": False}
+            "tools": [*body.get("tools", []), *TOOLS], "parallel_tool_calls": False}
     history = [{"role": "user", "content": body["input"]}]
     calls_used = 0
+    searches_left = body.get("max_tool_calls", 0)
     for round_number in range(5):
         if round_number == 4 or calls_used >= 4:
             body["tool_choice"] = "none"
@@ -20,6 +21,17 @@ async def run_tool_agent(client, body, headers, actions, actor):
         if result.get("status", "completed") != "completed":
             raise ValueError("미완료 응답은 대화 상태로 저장하지 않습니다.")
         output = result.get("output", [])
+        searches = sum(item.get("type") == "web_search_call" for item in output)
+        if searches:
+            print("웹 검색 도구 사용:", searches, flush=True)
+            searches_left -= searches
+            if searches_left < 0:
+                raise ValueError("허용된 검색 횟수를 넘었습니다.")
+            if searches_left:
+                body["max_tool_calls"] = searches_left
+            else:
+                body["tools"] = [tool for tool in body["tools"] if tool.get("type") != "web_search"]
+                body.pop("max_tool_calls", None)
         calls = [item for item in output if item.get("type") == "function_call"]
         if not calls:
             answer = read_answer(result)

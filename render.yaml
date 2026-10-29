@@ -25,6 +25,8 @@ services:
         value: gpt-4.1-mini
       - key: LLM_MODE
         value: echo
+      - key: WEB_SEARCH_MODE
+        value: auto
       - key: ACTION_MODE
         value: "off"
       - key: KAKAO_TEXT_PATH

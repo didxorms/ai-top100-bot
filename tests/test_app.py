@@ -360,6 +360,51 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
              patch("bot.app.httpx.AsyncClient", side_effect=client_factory):
             await bot.handle_event({"d": {"content": "질문"}}, "malformed-callback")
 
+    async def test_search_configuration_is_used_and_citations_reach_kakao(self):
+        requests = []
+        text = "기사 요약 citesource"
+
+        def handler(request):
+            requests.append(request)
+            if request.url.host == "api.openai.com":
+                return httpx.Response(200, json={"status": "completed", "output": [
+                    {"type": "web_search_call", "status": "completed"},
+                    {"type": "message", "content": [{"type": "output_text", "text": text,
+                        "annotations": [{"type": "url_citation", "start_index": text.index(""),
+                            "end_index": len(text), "url": "https://example.com/news", "title": "기사"}]}]},
+                ]})
+            return httpx.Response(200, json={"sendCount": 1, "errorCount": 0})
+
+        def client_factory(**kwargs):
+            return REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handler), **kwargs)
+
+        with patch("bot.app.WEB_SEARCH_MODE", "auto"), \
+             patch("bot.app.httpx.AsyncClient", side_effect=client_factory):
+            await bot.handle_event({"d": {"content": "오늘 뉴스"}}, "search-callback")
+        request_body = json.loads(requests[0].content)
+        self.assertEqual(request_body["tools"][0]["type"], "web_search")
+        answer = json.loads(requests[1].content)["skillResponse"]["template"]["outputs"][0]["simpleText"]["text"]
+        self.assertIn("기사 요약", answer)
+        self.assertIn("https://example.com/news", answer)
+        self.assertNotIn("", answer)
+
+    async def test_search_off_keeps_plain_response_flow(self):
+        requests = []
+
+        def handler(request):
+            requests.append(json.loads(request.content))
+            return httpx.Response(200, json={"output": [{"type": "message", "content": [
+                {"type": "output_text", "text": "답변"},
+            ]}]})
+
+        def client_factory(**kwargs):
+            return REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handler), **kwargs)
+
+        with patch("bot.app.WEB_SEARCH_MODE", "off"), \
+             patch("bot.app.httpx.AsyncClient", side_effect=client_factory):
+            await bot.generate_answer("질문")
+        self.assertNotIn("tools", requests[0])
+
 
 if __name__ == "__main__":
     unittest.main()
