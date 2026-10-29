@@ -1,6 +1,8 @@
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 from bot.conversation_state import ConversationStore, session_key_from_event
 
@@ -45,6 +47,30 @@ class ConversationStateTests(unittest.TestCase):
             reopened.reset("one")
             self.assertIsNone(store.get("one"))
             self.assertEqual(store.get("two"), "resp_2")
+
+    def test_callback_claim_is_atomic_persistent_and_does_not_store_raw_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.sqlite3"
+            store = ConversationStore(path)
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(pool.map(store.claim_callback, ["private-callback-token"] * 4))
+            self.assertEqual(sum(results), 1)
+            self.assertFalse(ConversationStore(path).claim_callback("private-callback-token"))
+            self.assertNotIn(b"private-callback-token", path.read_bytes())
+
+    def test_expired_callback_receipts_are_cleaned_up(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ConversationStore(Path(directory) / "state.sqlite3")
+            with patch("bot.conversation_state.time.time", return_value=1000):
+                self.assertTrue(store.claim_callback("one"))
+                self.assertFalse(store.claim_callback("one"))
+            with patch("bot.conversation_state.time.time", return_value=1601):
+                self.assertTrue(store.claim_callback("two"))
+            connection = store._connect()
+            try:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM callback_receipts").fetchone()[0], 1)
+            finally:
+                connection.close()
 
 
 if __name__ == "__main__":

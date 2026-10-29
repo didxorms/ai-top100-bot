@@ -3,6 +3,8 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -273,7 +275,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(actions.store.registrations(actor), [])
             pending = actions.store.pending(actor)
             self.assertIn(pending["code"], json.dumps(replies, ensure_ascii=False))
-            await bot.handle_event({"d": {**event["d"], "content": "/신청확정 " + pending["code"]}}, "fake-callback")
+            await bot.handle_event({"d": {**event["d"], "content": "/신청확정 " + pending["code"]}}, "fake-confirm-callback")
             self.assertEqual(len(actions.store.registrations(actor)), 1)
             self.assertEqual(len(openai_requests), 2)  # 확정은 LLM 호출 없이 서버가 처리합니다.
             self.assertEqual(self.store.get(session_key_from_event(event)), "resp_done")
@@ -289,6 +291,74 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             await bot.handle_event({"d": {"content": "/실습"}}, "fake-token")
         generate.assert_not_awaited()
         self.assertIn("실습", reply.await_args.args[1])
+
+    async def test_duplicate_delivery_is_processed_once_even_after_store_reopen(self):
+        event = {"d": {"botGroupKey": "room", "content": "테스트 질문"}}
+        with patch("bot.app.generate_answer", new_callable=AsyncMock, return_value="답변") as generate, \
+             patch("bot.app.send_reply", new_callable=AsyncMock) as reply:
+            await asyncio.gather(*(bot.handle_event(event, "same-callback") for _ in range(3)))
+            with patch("bot.app.STATE_STORE", ConversationStore(self.store.path)):
+                await bot.handle_event(event, "same-callback")
+            generate.assert_awaited_once()
+            reply.assert_awaited_once()
+
+    async def test_same_text_with_distinct_callback_tokens_is_not_deduplicated(self):
+        event = {"d": {"content": "같은 질문"}}
+        with patch("bot.app.generate_answer", new_callable=AsyncMock, return_value="답변") as generate, \
+             patch("bot.app.send_reply", new_callable=AsyncMock):
+            await bot.handle_event(event, "callback-one")
+            await bot.handle_event(event, "callback-two")
+            self.assertEqual(generate.await_count, 2)
+
+    async def test_incomplete_generation_does_not_replace_previous_id(self):
+        self.store.set("session", "resp_keep")
+
+        def handler(request):
+            return httpx.Response(200, json={"id": "resp_partial", "status": "incomplete", "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "미완성 답변"}]},
+            ]})
+
+        def client_factory(**kwargs):
+            return REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handler), **kwargs)
+
+        with patch("bot.app.httpx.AsyncClient", side_effect=client_factory):
+            with self.assertRaises(ValueError):
+                await bot.generate_answer("질문", "session")
+        self.assertEqual(self.store.get("session"), "resp_keep")
+
+    async def test_rate_limit_and_timeout_return_safe_reply_without_logging_secrets(self):
+        errors = [TimeoutError("private-secret"), httpx.HTTPStatusError(
+            "private-secret", request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+            response=httpx.Response(429),
+        )]
+        for index, error in enumerate(errors):
+            with self.subTest(error=type(error).__name__), \
+                 patch("bot.app.generate_answer", new_callable=AsyncMock, side_effect=error), \
+                 patch("bot.app.send_reply", new_callable=AsyncMock) as reply, \
+                 redirect_stdout(StringIO()) as logs:
+                await bot.handle_event({"d": {"content": "질문"}}, f"failure-callback-{index}")
+                reply.assert_awaited_once()
+                self.assertNotIn("private-secret", logs.getvalue() + reply.await_args.args[1])
+
+    async def test_callback_http_success_with_delivery_failure_is_detected(self):
+        def client_factory(**kwargs):
+            return REAL_ASYNC_CLIENT(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"sendCount": 0, "errorCount": 1})
+            ), **kwargs)
+
+        with patch("bot.app.httpx.AsyncClient", side_effect=client_factory):
+            with self.assertRaises(ValueError):
+                await bot.send_reply("fake-callback", "테스트 답변")
+
+    async def test_malformed_callback_response_does_not_crash_background_handler(self):
+        def client_factory(**kwargs):
+            return REAL_ASYNC_CLIENT(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json=[])
+            ), **kwargs)
+
+        with patch("bot.app.generate_answer", new_callable=AsyncMock, return_value="답변"), \
+             patch("bot.app.httpx.AsyncClient", side_effect=client_factory):
+            await bot.handle_event({"d": {"content": "질문"}}, "malformed-callback")
 
 
 if __name__ == "__main__":

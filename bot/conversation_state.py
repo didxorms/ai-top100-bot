@@ -3,6 +3,7 @@
 import hashlib
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 
@@ -67,6 +68,27 @@ class ConversationStore:
         try:
             with connection:
                 connection.execute("DELETE FROM conversations WHERE session_key = ?", (session_key,))
+        finally:
+            connection.close()
+
+    def claim_callback(self, callback_token: str):
+        """동일 콜백은 재시작 후에도 한 번만 접수합니다. 원문 토큰은 저장하지 않습니다."""
+        callback_key = hashlib.sha256(callback_token.encode("utf-8")).hexdigest()
+        now = time.time()
+        connection = self._connect()
+        try:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS callback_receipts ("
+                "callback_key TEXT PRIMARY KEY, expires_at REAL NOT NULL)"
+            )
+            with connection:
+                connection.execute("DELETE FROM callback_receipts WHERE expires_at <= ?", (now,))
+                inserted = connection.execute(
+                    "INSERT OR IGNORE INTO callback_receipts (callback_key, expires_at) VALUES (?, ?)",
+                    # 콜백 유효 시간 5분보다 길게 보관해 늦은 중복 전송도 걸러냅니다.
+                    (callback_key, now + 600),
+                ).rowcount
+            return inserted == 1
         finally:
             connection.close()
 

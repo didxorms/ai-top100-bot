@@ -58,7 +58,7 @@ render.yaml           Render 배포 설정
 - [OpenAI 공식 대화 관리 기능](https://developers.openai.com/api/docs/guides/conversation-state)의 `previous_response_id`를 사용합니다.
 - 첫 답변의 응답 ID를 저장하고, 다음 질문에서 그 ID를 전달해 이전 질문과 답변을 이어갑니다. 동작 지침은 요청마다 다시 전달합니다.
 - 1:1 채널은 사용자별로, 그룹방은 방 전체가 하나의 문맥을 공유합니다. 다른 그룹방과 채널 대화는 분리됩니다.
-- `.local/conversation-state.sqlite3`에는 해시로 만든 대화 식별자와 마지막 OpenAI 응답 ID만 저장합니다. 카카오 토큰과 대화 원문은 저장하지 않습니다.
+- `.local/conversation-state.sqlite3`에는 해시로 만든 대화 식별자와 마지막 OpenAI 응답 ID를 저장합니다. 중복 수신을 막는 콜백 토큰 해시도 10분 동안 보관하며, 만료된 접수 기록은 다음 접수 시 정리합니다. 카카오 토큰 원문과 대화 원문은 저장하지 않습니다.
 - 액션 실습 모드를 켜면 같은 DB의 별도 테이블에 요청자 해시와 연습용 신청 정보도 저장합니다.
 - 서버를 재시작해도 같은 DB 파일이 있으면 대화를 이어갑니다. 같은 방의 메시지는 순서대로 처리합니다. 현재 잠금은 단일 Uvicorn 프로세스용입니다.
 - `echo` 모드는 OpenAI를 호출하거나 새로운 기억을 만들지 않습니다.
@@ -89,6 +89,7 @@ ChatGPT 내부 구현 전체를 복제한 것은 아니며, 공식 API가 제공
 ```
 
 가짜 인증 정보와 가짜 HTTP 응답만 사용합니다. 실제 OpenAI나 카카오 API를 호출하지 않습니다.
+제출 전 점검 결과와 수동 확인 항목은 [제출 전 검증](docs/SUBMISSION_CHECK.md)에 정리했습니다.
 
 ## 대화 DB 백업
 

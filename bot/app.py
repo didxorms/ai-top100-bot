@@ -117,11 +117,15 @@ async def send_reply(callback_token: str, answer: str):
     response.raise_for_status()
 
     result = response.json()
+    if not isinstance(result, dict):
+        raise ValueError("카카오 콜백 응답 형식이 올바르지 않습니다.")
     print(
         "전송 성공:", result.get("sendCount"),
         "전송 실패:", result.get("errorCount"),
         flush=True,
     )
+    if type(result.get("sendCount")) is not int or result["sendCount"] < 1 or result.get("errorCount") != 0:
+        raise ValueError("카카오 메시지 전송에 실패했습니다.")
 
 
 async def process_event(event: dict, callback_token: str, session_key: str | None):
@@ -170,11 +174,28 @@ async def process_event(event: dict, callback_token: str, session_key: str | Non
             answer = "답변을 생성하지 못했습니다. 잠시 후 다시 질문해 주세요."
     try:
         await send_reply(callback_token, answer)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         print("카카오 답장 실패:", type(exc).__name__, flush=True)
 
 
 async def handle_event(event: dict, callback_token: str):
+    try:
+        # DB 대기가 다른 웹훅의 1초 이내 접수 응답을 막지 않도록 합니다.
+        accepted = await asyncio.to_thread(STATE_STORE.claim_callback, callback_token)
+    except (OSError, sqlite3.Error) as exc:
+        print("메시지 접수 상태 확인 실패:", type(exc).__name__, flush=True)
+        try:
+            await send_reply(callback_token, "메시지를 처리하지 못했습니다. 잠시 후 다시 질문해 주세요.")
+        except (httpx.HTTPError, ValueError) as send_error:
+            print("카카오 답장 실패:", type(send_error).__name__, flush=True)
+        return
+    if not accepted:
+        print("중복 콜백 접수 생략", flush=True)
+        return
+    await handle_accepted_event(event, callback_token)
+
+
+async def handle_accepted_event(event: dict, callback_token: str):
     session_key = session_key_from_event(event)
     if session_key is None:
         await process_event(event, callback_token, None)
@@ -189,16 +210,16 @@ async def handle_event(event: dict, callback_token: str):
     except TimeoutError:
         try:
             await send_reply(callback_token, "앞선 질문을 처리 중입니다. 잠시 후 다시 질문해 주세요.")
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, ValueError) as exc:
             print("카카오 답장 실패:", type(exc).__name__, flush=True)
         return
     try:
         await process_event(event, callback_token, session_key)
-    except sqlite3.Error as exc:
+    except (OSError, sqlite3.Error) as exc:
         print("대화 상태 처리 실패:", type(exc).__name__, flush=True)
         try:
             await send_reply(callback_token, "대화 상태를 확인하지 못했습니다. 잠시 후 다시 질문해 주세요.")
-        except httpx.HTTPError as send_error:
+        except (httpx.HTTPError, ValueError) as send_error:
             print("카카오 답장 실패:", type(send_error).__name__, flush=True)
     finally:
         lock.release()
@@ -225,7 +246,7 @@ async def receive_event(event: dict, tasks: BackgroundTasks):
     data = event.get("d")
     if isinstance(data, dict):
         callback_token = data.get("callbackToken")
-        if isinstance(callback_token, str) and callback_token:
+        if isinstance(callback_token, str) and callback_token.strip():
             tasks.add_task(handle_event, event, callback_token)
 
     # 응답을 먼저 보낸 뒤 LLM 처리와 답장 전송을 시작합니다.

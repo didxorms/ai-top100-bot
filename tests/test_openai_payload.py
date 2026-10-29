@@ -26,6 +26,19 @@ class PayloadTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             read_answer({"output": [{"type": "reasoning"}]})
 
+    def test_incomplete_and_malformed_responses_are_rejected(self):
+        for response in (
+            {"status": "incomplete", "output": [{"type": "message", "content": [
+                {"type": "output_text", "text": "partial"}
+            ]}]},
+            None, [], {"output": None}, {"output": [None]},
+            {"output": [{"type": "message", "content": None}]},
+            {"output": [{"type": "message", "content": [None]}]},
+            {"output": [{"type": "message", "content": [{"type": "output_text", "text": 1}]}]},
+        ):
+            with self.subTest(response=response), self.assertRaises(ValueError):
+                read_answer(response)
+
     def test_kakao_limits_and_no_loss_within_limit(self):
         for length in (1, 1000, 1001, 3000, 3001):
             with self.subTest(length=length):
