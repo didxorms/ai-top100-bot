@@ -149,6 +149,8 @@ class ContestTests(unittest.IsolatedAsyncioTestCase):
         response=make_skill_response("가"*1001,max_chars=500)
         self.assertEqual(len(response["template"]["outputs"]),1)
         self.assertEqual(len(response["template"]["outputs"][0]["simpleText"]["text"]),500)
+        plain=make_skill_response("**접수** 019-****-1234",max_chars=500)
+        self.assertEqual(plain["template"]["outputs"][0]["simpleText"]["text"],"접수 019-****-1234")
 
     async def test_tool_loop_supports_more_than_four_calls(self):
         count=0

@@ -1,5 +1,7 @@
 """OpenAI 연동용 요청과 응답 형식만 준비합니다. 외부 API는 호출하지 않습니다."""
 
+import re
+
 from .web_search import MAX_SEARCH_CALLS, WEB_SEARCH_TOOL, render_citations, search_instructions, split_kakao_text
 
 
@@ -81,6 +83,8 @@ def read_answer(response: dict):
 def make_skill_response(answer: str, max_chars: int | None = None):
     # 카카오 제한: 말풍선당 1,000자, 최대 3개 말풍선.
     answer = answer.strip() or "답변을 생성하지 못했습니다. 다시 질문해 주세요."
+    # SimpleText does not render Markdown bold. Preserve runs used to mask phone numbers.
+    answer = re.sub(r"(?<!\*)\*\*(?!\*)", "", answer)
     if max_chars is not None:
         # Competition accepts one SimpleText bubble, at most 500 characters.
         # In ordinary use the model is instructed to stay below this bound.
