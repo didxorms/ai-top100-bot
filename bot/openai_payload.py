@@ -78,9 +78,14 @@ def read_answer(response: dict):
     return answer
 
 
-def make_skill_response(answer: str):
+def make_skill_response(answer: str, max_chars: int | None = None):
     # 카카오 제한: 말풍선당 1,000자, 최대 3개 말풍선.
     answer = answer.strip() or "답변을 생성하지 못했습니다. 다시 질문해 주세요."
+    if max_chars is not None:
+        # Competition accepts one SimpleText bubble, at most 500 characters.
+        # In ordinary use the model is instructed to stay below this bound.
+        answer = answer[:max_chars]
+        return {"version": "2.0", "template": {"outputs": [{"simpleText": {"text": answer}}]}}
     return {
         "version": "2.0",
         "template": {

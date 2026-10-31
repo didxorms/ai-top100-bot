@@ -14,6 +14,8 @@ from .conversation_state import ConversationStore, session_key_from_event
 from .openai_payload import make_request_body, make_skill_response, read_answer
 from .action_tools import PracticeActions, actor_key_from_event
 from .tool_agent import run_tool_agent
+from .contest import ContestRuntime, run_contest_agent
+from .contest_media import transcribe_audio
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BASE_DIR / ".env")
@@ -35,9 +37,10 @@ STATE_STORE = ConversationStore(DATA_DIR / "conversation-state.sqlite3")
 SESSION_LOCKS = WeakValueDictionary()
 RESET_COMMANDS = {"/새대화", "/초기화", "/new"}
 ACTION_MODE = os.getenv("ACTION_MODE", "off").strip().lower()
-if ACTION_MODE not in {"off", "mock"}:
-    raise ValueError("ACTION_MODE는 off 또는 mock이어야 합니다.")
+if ACTION_MODE not in {"off", "mock", "contest"}:
+    raise ValueError("ACTION_MODE는 off, mock 또는 contest이어야 합니다.")
 PRACTICE_ACTIONS = PracticeActions(STATE_STORE.path) if ACTION_MODE == "mock" else None
+CONTEST = ContestRuntime(STATE_STORE.path) if ACTION_MODE == "contest" else None
 
 app = FastAPI()
 
@@ -77,18 +80,43 @@ def extract_user_text(event: dict, path: str):
 
 
 async def generate_answer(user_text: str, session_key: str | None = None, actor_key: str | None = None):
-    previous_id = STATE_STORE.get(session_key) if session_key else None
+    tc = CONTEST.case_for(session_key, user_text) if CONTEST else None
+    memory_key = f"contest-v1:{session_key}:{tc or 'unassigned'}" if CONTEST and session_key else session_key
+    previous_id = STATE_STORE.get(memory_key) if memory_key else None
     # 질문과 연습용 도구 결과만 전달하며 카카오 이벤트, 식별자, 토큰은 제외합니다.
     async with httpx.AsyncClient(timeout=90) as client:
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+        if CONTEST:
+            user_text = await transcribe_audio(client, user_text, headers)
         body = make_request_body(
             user_text,
             model=OPENAI_MODEL,
             remember=session_key is not None,
             previous_response_id=previous_id,
-            web_search=WEB_SEARCH_MODE == "auto",
+            web_search=WEB_SEARCH_MODE == "auto" and CONTEST is None,
         )
-        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
-        if PRACTICE_ACTIONS:
+        if CONTEST:
+            body["instructions"] = CONTEST.instructions(user_text, tc)
+            # Only contest-supplied Kakao CDN images are loaded; arbitrary user URLs are not fetched.
+            import re
+            images = re.findall(r"https://t1\.kakaocdn\.net/aitop100/[^\s<>\"']+\.(?:jpg|jpeg|png)(?:\?[^\s<>\"']*)?", user_text, flags=re.I)
+            if images:
+                body["input"] = [{"role": "user", "content": [
+                    {"type": "input_text", "text": user_text},
+                    *[{"type": "input_image", "image_url": url, "detail": "auto"} for url in images[:3]],
+                ]}]
+        if CONTEST:
+            scope = f"{session_key or 'unidentified'}:{tc}" if tc else None
+            CONTEST.prime(scope, user_text)
+            if scope:
+                context = CONTEST.context(scope)
+                receipts = context.get("safety_receipts", {})
+                if receipts:
+                    body["instructions"] += "\n서버가 앞선 답장에서 실제 접수한 별도 안전 확인 기록: " + json.dumps(receipts, ensure_ascii=False)
+                if context.get("last_receipts"):
+                    body["instructions"] += "\n현재 TC의 실제 접수 기록(완료/승인 아님): " + json.dumps(context["last_receipts"],ensure_ascii=False)
+            result, answer = await run_contest_agent(client, body, headers, CONTEST, scope)
+        elif PRACTICE_ACTIONS:
             result, answer = await run_tool_agent(client, body, headers, PRACTICE_ACTIONS, actor_key)
         else:
             response = await client.post(
@@ -101,10 +129,13 @@ async def generate_answer(user_text: str, session_key: str | None = None, actor_
             if search_calls:
                 print("웹 검색 도구 사용:", search_calls, flush=True)
     if session_key:
+        if result.get("fallback"):
+            STATE_STORE.reset(memory_key)
+            return answer
         response_id = result.get("id")
         if not isinstance(response_id, str) or not response_id:
             raise ValueError("대화를 이어가기 위한 OpenAI 응답 ID가 없습니다.")
-        STATE_STORE.set(session_key, response_id)
+        STATE_STORE.set(memory_key, response_id)
     return answer
 
 
@@ -117,7 +148,7 @@ async def send_reply(callback_token: str, answer: str):
                 "Authorization": f"KakaoAK {BOT_TOKEN}",
                 "X-Bot-Callback-Token": callback_token,
             },
-            json={"skillResponse": make_skill_response(answer)},
+            json={"skillResponse": make_skill_response(answer, max_chars=500 if CONTEST else None)},
         )
 
     print("콜백 HTTP 상태:", response.status_code, flush=True)
@@ -149,6 +180,10 @@ async def process_event(event: dict, callback_token: str, session_key: str | Non
         answer = command_answer
     elif user_text in RESET_COMMANDS:
         if session_key:
+            if CONTEST:
+                tc = CONTEST.case_for(session_key, "")
+                STATE_STORE.reset(f"contest-v1:{session_key}:{tc or 'unassigned'}")
+                CONTEST.reset(session_key)
             STATE_STORE.reset(session_key)
             if PRACTICE_ACTIONS and actor_key:
                 await asyncio.to_thread(PRACTICE_ACTIONS.store.cancel, actor_key)
@@ -171,7 +206,7 @@ async def process_event(event: dict, callback_token: str, session_key: str | Non
                 generation = generate_answer(user_text, session_key, actor_key)
             else:
                 generation = generate_answer(user_text, session_key)
-            answer = await asyncio.wait_for(generation, timeout=100)
+            answer = await asyncio.wait_for(generation, timeout=48 if CONTEST else 100)
             print("OpenAI 답변 생성 성공", flush=True)
         except httpx.HTTPStatusError as exc:
             print("OpenAI HTTP 오류:", exc.response.status_code, flush=True)
@@ -213,7 +248,7 @@ async def handle_accepted_event(event: dict, callback_token: str):
         SESSION_LOCKS[session_key] = lock
     try:
         # 같은 방의 요청을 순서대로 처리하되, 콜백 유효 시간을 넘겨 기다리지 않습니다.
-        await asyncio.wait_for(lock.acquire(), timeout=110)
+        await asyncio.wait_for(lock.acquire(), timeout=3 if CONTEST else 110)
     except TimeoutError:
         try:
             await send_reply(callback_token, "앞선 질문을 처리 중입니다. 잠시 후 다시 질문해 주세요.")
@@ -239,12 +274,17 @@ async def health():
 
 @app.get("/healthz")
 async def readiness():
+    if CONTEST and not CONTEST.token:
+        return JSONResponse(status_code=503, content={"status": "unavailable"})
     try:
         # DB 처리가 웹훅의 접수 응답을 막지 않도록 별도 스레드에서 점검합니다.
         await asyncio.to_thread(STATE_STORE.check_health)
     except (OSError, sqlite3.Error) as exc:
         print("저장 공간 상태 점검 실패:", type(exc).__name__, flush=True)
         return JSONResponse(status_code=503, content={"status": "unavailable"})
+    if CONTEST:
+        return {"status": "ok", "mode": "contest", "knowledge_documents": len(CONTEST.bundle["documents"]),
+                "action_operations": len(CONTEST.operations)}
     return {"status": "ok"}
 
 
