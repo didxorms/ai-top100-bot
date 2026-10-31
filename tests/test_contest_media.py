@@ -2,7 +2,7 @@ import unittest
 
 import httpx
 
-from bot.contest_media import transcribe_audio
+from bot.contest_media import transcribe_audio, media_text
 
 
 class MediaTests(unittest.IsolatedAsyncioTestCase):
@@ -26,3 +26,14 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
             text=await transcribe_audio(client,"https://example.com/private.m4a",{})
         self.assertEqual(text,"https://example.com/private.m4a")
 
+    async def test_reported_phishing_link_is_not_opened_even_on_allowed_cdn(self):
+        text="사칭 제보 URL: https://t1.kakaocdn.net/aitop100/report.m4a"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: self.fail("must not fetch reported URL"))) as client:
+            result=await transcribe_audio(client,text,{})
+        self.assertEqual(result,text)
+
+    def test_phishing_screenshot_is_distinct_from_reported_link(self):
+        text="피싱 제보 URL: https://t1.kakaocdn.net/aitop100/report.png\nimage: https://t1.kakaocdn.net/aitop100/screenshot.png"
+        filtered=media_text(text)
+        self.assertNotIn("report.png",filtered)
+        self.assertIn("screenshot.png",filtered)

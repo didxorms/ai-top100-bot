@@ -8,8 +8,16 @@ AUDIO_URL = re.compile(r"https://t1\.kakaocdn\.net/aitop100/[^\s<>\"']+\.(?:m4a|
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
 
 
+def media_text(text):
+    """Reported phishing URLs are evidence, not media attachments to open."""
+    if not re.search(r"피싱|사칭|사기|제보\s*(?:URL|링크)|결제\s*링크|링크.*결제", text, re.I):
+        return text
+    return "\n".join(line for line in text.splitlines()
+                     if re.match(r"^\s*(?:image|audio|이미지|음성|사진|캡처)\s*[:：]", line, re.I))
+
+
 async def transcribe_audio(client, text, headers):
-    match = AUDIO_URL.search(text)
+    match = AUDIO_URL.search(media_text(text))
     if not match:
         return text
     url = match.group(0)

@@ -15,7 +15,7 @@ from .openai_payload import make_request_body, make_skill_response, read_answer
 from .action_tools import PracticeActions, actor_key_from_event
 from .tool_agent import run_tool_agent
 from .contest import ContestRuntime, run_contest_agent
-from .contest_media import transcribe_audio
+from .contest_media import transcribe_audio, media_text
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BASE_DIR / ".env")
@@ -99,7 +99,7 @@ async def generate_answer(user_text: str, session_key: str | None = None, actor_
             body["instructions"] = CONTEST.instructions(user_text, tc)
             # Only contest-supplied Kakao CDN images are loaded; arbitrary user URLs are not fetched.
             import re
-            images = re.findall(r"https://t1\.kakaocdn\.net/aitop100/[^\s<>\"']+\.(?:jpg|jpeg|png)(?:\?[^\s<>\"']*)?", user_text, flags=re.I)
+            images = re.findall(r"https://t1\.kakaocdn\.net/aitop100/[^\s<>\"']+\.(?:jpg|jpeg|png)(?:\?[^\s<>\"']*)?", media_text(user_text), flags=re.I)
             if images:
                 body["input"] = [{"role": "user", "content": [
                     {"type": "input_text", "text": user_text},
